@@ -19,27 +19,35 @@ import kotlinx.coroutines.cancelChildren
 
 class DolbyViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repository = DolbyRepository(application)
+    private var repository: DolbyRepository? = null
 
     private val _uiState = MutableStateFlow<DolbyUiState>(DolbyUiState.Loading)
     val uiState: StateFlow<DolbyUiState> = _uiState.asStateFlow()
-    val currentProfile: StateFlow<Int> = repository.currentProfile
-    
+    private val _currentProfile = MutableStateFlow(0)
+    val currentProfile: StateFlow<Int> = _currentProfile.asStateFlow()
+
     private var speakerStateJob: Job? = null
     private var profileChangeJob: Job? = null
     private var isCleared = false
 
     init {
         DolbyConstants.dlog(TAG, "ViewModel initialized")
-        loadSettings()
-        observeSpeakerState()
-        observeProfileChanges()
+        runCatching {
+            repository = DolbyRepository(application)
+        }.onFailure {
+            DolbyConstants.dlog(TAG, "Dolby backend unavailable: ${it.message}")
+            _uiState.value = DolbyUiState.Error(DOLBY_UNAVAILABLE_MESSAGE)
+        }.onSuccess {
+            loadSettings()
+            observeSpeakerState()
+            observeProfileChanges()
+        }
     }
-    
+
     private fun observeSpeakerState() {
         speakerStateJob?.cancel()
         speakerStateJob = viewModelScope.launch {
-            repository.isOnSpeaker.collect { 
+            repository?.isOnSpeaker?.collect {
                 if (!isCleared) {
                     DolbyConstants.dlog(TAG, "Speaker state changed: $it")
                     loadSettings()
@@ -47,13 +55,14 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    
+
     private fun observeProfileChanges() {
         profileChangeJob?.cancel()
         profileChangeJob = viewModelScope.launch {
-            repository.currentProfile.collect {
+            repository?.currentProfile?.collect {
                 if (!isCleared) {
                     DolbyConstants.dlog(TAG, "Profile changed to: $it")
+                    _currentProfile.value = it
                     loadSettings()
                 }
             }
@@ -65,13 +74,23 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
             DolbyConstants.dlog(TAG, "ViewModel cleared, skipping loadSettings")
             return
         }
-        
+
+        val repository = repository
+        if (repository == null) {
+            _uiState.value = DolbyUiState.Error(DOLBY_UNAVAILABLE_MESSAGE)
+            return
+        }
+        if (!repository.isBackendAvailable) {
+            _uiState.value = DolbyUiState.Error(DOLBY_UNAVAILABLE_MESSAGE)
+            return
+        }
+
         viewModelScope.launch {
             try {
                 val enabled = repository.getDolbyEnabled()
                 val profile = repository.getCurrentProfile()
                 val bandMode = repository.getBandMode()
-                
+
                 val settings = DolbySettings(
                     enabled = enabled,
                     currentProfile = profile,
@@ -79,7 +98,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
                     volumeLevelerEnabled = repository.getVolumeLevelerEnabled(profile),
                     bandMode = bandMode
                 )
-                
+
                 val profileSettings = ProfileSettings(
                     profile = profile,
                     ieqPreset = repository.getIeqPreset(profile),
@@ -93,7 +112,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
                     trebleLevel = repository.getTrebleLevel(profile),
                     bassCurve = repository.getBassCurve(profile)
                 )
-                
+
                 if (!isCleared) {
                     _uiState.value = DolbyUiState.Success(
                         settings = settings,
@@ -112,6 +131,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setDolbyEnabled(enabled: Boolean) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 repository.setDolbyEnabled(enabled)
@@ -128,6 +148,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setProfile(profile: Int) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 repository.setCurrentProfile(profile)
@@ -138,6 +159,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setBassEnhancer(enabled: Boolean) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 val profile = repository.getCurrentProfile()
@@ -150,6 +172,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setBassLevel(level: Int) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 val profile = repository.getCurrentProfile()
@@ -166,6 +189,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setBassCurve(curve: Int) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 val profile = repository.getCurrentProfile()
@@ -178,6 +202,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setMidLevel(level: Int) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 val profile = repository.getCurrentProfile()
@@ -194,6 +219,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setTrebleLevel(level: Int) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 val profile = repository.getCurrentProfile()
@@ -210,6 +236,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setVolumeLeveler(enabled: Boolean) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 val profile = repository.getCurrentProfile()
@@ -222,6 +249,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setIeqPreset(preset: Int) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 val profile = repository.getCurrentProfile()
@@ -234,6 +262,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setHeadphoneVirtualizer(enabled: Boolean) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 val profile = repository.getCurrentProfile()
@@ -246,6 +275,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setSpeakerVirtualizer(enabled: Boolean) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 val profile = repository.getCurrentProfile()
@@ -258,6 +288,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setStereoWidening(amount: Int) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 val profile = repository.getCurrentProfile()
@@ -270,6 +301,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setDialogueEnhancer(enabled: Boolean) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 val profile = repository.getCurrentProfile()
@@ -282,6 +314,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setDialogueEnhancerAmount(amount: Int) {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 val profile = repository.getCurrentProfile()
@@ -294,6 +327,7 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun resetAllProfiles() {
+        val repository = repository ?: return showDolbyUnavailable()
         viewModelScope.launch {
             try {
                 repository.resetAllProfiles()
@@ -306,10 +340,14 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateSpeakerState() {
         if (!isCleared) {
-            repository.updateSpeakerState()
+            repository?.updateSpeakerState()
         }
     }
-    
+
+    private fun showDolbyUnavailable() {
+        _uiState.value = DolbyUiState.Error(DOLBY_UNAVAILABLE_MESSAGE)
+    }
+
     override fun onCleared() {
         DolbyConstants.dlog(TAG, "ViewModel onCleared")
         isCleared = true
@@ -318,11 +356,13 @@ class DolbyViewModel(application: Application) : AndroidViewModel(application) {
         speakerStateJob = null
         profileChangeJob?.cancel()
         profileChangeJob = null
-        repository.close()
+        repository?.close()
         super.onCleared()
     }
-    
+
     companion object {
         private const val TAG = "DolbyViewModel"
+        private const val DOLBY_UNAVAILABLE_MESSAGE =
+            "Dolby backend is unavailable. Check audio effect/vendor Dolby service logs."
     }
 }
